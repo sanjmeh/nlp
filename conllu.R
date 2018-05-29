@@ -22,6 +22,7 @@ library(htmlTable)
 library(htmltools)
 library(wrapr)
 library(textreuse)
+library(rdrop2)
 
 #---- LOAD VARIABLES AND CONSTANTS -----
 assert_that(grepl("nlp",getwd()),msg = "You are not in the correct working directory")
