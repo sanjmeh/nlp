@@ -58,11 +58,12 @@ clean_dtm <- function(dtm,m){
 tag <- function(file = NULL, model = model1){
     cat("Autodetecting headers and footers...")
     alltext <- suppressWarnings( autodet(file,ret_full = T)  )
-    cat("detected and removed\nCleaning Vs., Mr., Mrs., No.,..")
+    cat("detected and removed\nCleaning Vs., Mr., Mrs., Dr., No.,..")
   cleantext <- alltext %>% 
         str_replace_all(pattern = "[Vv]s*\\.",replacement = "vs") %>% 
         str_replace_all(pattern = "(M[rs]s*)\\.",replacement = "\\1") %>% 
-        str_replace_all(pattern = "[Nn]o\\.",replacement = "number")
+        str_replace_all(pattern = "[Nn]o\\.",replacement = "number") %>% 
+        str_replace_all(pattern = "Dr\\.",replacement = "Dr")
   cleantext %>% paste(collapse = " ") -> onetext
     cat("DONE.\n")
     
@@ -486,12 +487,15 @@ autodet <- function(filename=NULL,verbose=F,ret_full=F){
     if(ret_full) alltext %>% lapply(drop_element_regex, pattern = "HEADERZZZ|FOOTERZZZZ") %>% lapply(c) %>% unlist else dt_allhf
 }
 
-autosmry <- function(dtm=dtm_flat,docno=1,nosent=5, valuen=100,valuebands=20, seed=123){
+autosmry <- function(dtm=dtm_flat,docno=1, valuen=100,valuebands=20, seed=123){
   dtm[doc_id==docno & upos %in% c("NOUN","ADJ"),.(sentence_id,lemma)] %>% unique -> lemma1
   dtm[doc_id==docno,.(sentence_id,sentence)] %>% unique -> sent1
   candidates1 <- textrank_candidates_lsh(lemma1$lemma,sentence_id = lemma1$sentence_id,
                                          minhashFUN = minhash_generator(n = valuen, seed = seed),bands = valuebands)
-  tr <-textrank_sentences(data = sent1, terminology = lemma1,textrank_candidates = candidates1)
+  textrank_sentences(data = sent1, terminology = lemma1,textrank_candidates = candidates1)
+}
+
+smry <- function(tr,nosent){
   summary(tr,n = nosent,keep.sentence.order = T)
 }
 
