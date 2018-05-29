@@ -21,10 +21,11 @@ library(assertthat)
 library(htmlTable)
 library(htmltools)
 library(wrapr)
+library(textreuse)
 
 #---- LOAD VARIABLES AND CONSTANTS -----
 assert_that(grepl("nlp",getwd()),msg = "You are not in the correct working directory")
-casepath<- "./SC_2018"
+casepath<- "./virsa"
 is.dir(casepath)
 scfile <- list.files(pattern = "pdf",path =casepath,full.names = T)
 docno <- frank(scfile)
@@ -172,14 +173,18 @@ extr_capit_act <- function(dtm=null,verbose=F){
     dtm$token_id %<>% as.integer()
     dtm[token_id<3 & str_detect(token,"Act"),first_few:=T]
     dtm[upos %in% c("PROPN","NOUN","ADJ","VERB","ADP","DET")][
-        ,w1:=txt_previous(token,1),by=sentence_id][
-            ,w2:=txt_previous(token,2),by=sentence_id][
-                ,w3:=txt_previous(token,3),by=sentence_id][
-                    ,w4:=txt_previous(token,4),by=sentence_id][
-            ,u1:=txt_previous(upos,1),by=sentence_id][
-                ,u2:=txt_previous(upos,2),by=sentence_id][
-                    ,u3:=txt_previous(upos,3),by=sentence_id][
-                        ,u4:=txt_previous(upos,4),by=sentence_id] -> dtm_enr
+      ,w1:=txt_previous(token,1),by=sentence_id][
+        ,w2:=txt_previous(token,2),by=sentence_id][
+          ,w3:=txt_previous(token,3),by=sentence_id][
+            ,w4:=txt_previous(token,4),by=sentence_id][
+              ,w5:=txt_previous(token,5),by=sentence_id][
+                ,w6:=txt_previous(token,6),by=sentence_id][
+                  ,u1:=txt_previous(upos,1),by=sentence_id][
+                    ,u2:=txt_previous(upos,2),by=sentence_id][
+                      ,u3:=txt_previous(upos,3),by=sentence_id][
+                        ,u4:=txt_previous(upos,4),by=sentence_id][
+                          ,u5:=txt_previous(upos,5),by=sentence_id][
+                            ,u6:=txt_previous(upos,6),by=sentence_id]  -> dtm_enr
     
     dtm_enr[(token=="Act") & grepl("^[A-Z].*",w1) & !(u2 %in%  c("ADP","DET")) & is.na(first_few),.(cand_string=paste(w2,w1)),by=sentence_id] -> cand_dt2
     cand_dt2$cand_string %>% unique -> candidate_words2
@@ -478,6 +483,15 @@ autodet <- function(filename=NULL,verbose=F,ret_full=F){
   if(uniqueN(dt_allhf$packf)==1) markout(alltext,flag="foot")  -> alltext else message(paste(filename,":no footer detected."))
 
     if(ret_full) alltext %>% lapply(drop_element_regex, pattern = "HEADERZZZ|FOOTERZZZZ") %>% lapply(c) %>% unlist else dt_allhf
+}
+
+autosmry <- function(dtm=dtm_flat,docno=1,nosent=5, valuen=100,valuebands=20, seed=123){
+  dtm[doc_id==docno & upos %in% c("NOUN","ADJ"),.(sentence_id,lemma)] %>% unique -> lemma1
+  dtm[doc_id==docno,.(sentence_id,sentence)] %>% unique -> sent1
+  candidates1 <- textrank_candidates_lsh(lemma1$lemma,sentence_id = lemma1$sentence_id,
+                                         minhashFUN = minhash_generator(n = valuen, seed = seed),bands = valuebands)
+  tr <-textrank_sentences(data = sent1, terminology = lemma1,textrank_candidates = candidates1)
+  summary(tr,n = nosent,keep.sentence.order = T)
 }
 
 #-----MAIN PROGRAM : Take user options----
