@@ -1,0 +1,5 @@
+[Ss]ection[s]*[ ][:digit:]+([-():,]*[:alnum:]*[-)():]*){1,4}
+[Aa]rticle[s]*[ ][:digit:]+([-():,]*[:alnum:]*[-)():]*){1,4}
+[Ee]ntr[yi][e]?[s]?[ ][:digit:]+
+
+

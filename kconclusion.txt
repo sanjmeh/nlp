@@ -1,0 +1,13 @@
+# now you can combine many keywords on same line separated by |
+#prefer to use | where spaces have to be included after the last word - see example of "if" - it has a space after 'if' and before 'if'.
+issue.+ if |
+issue.+ decide
+question.+ decide
+whether.+ decision
+# any line starting with # is ignored for processing
+has. +therefore
+hold
+held
+# write as many lines of comments
+it has been clearly laid|proceeding from
+
