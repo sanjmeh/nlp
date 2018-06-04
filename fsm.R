@@ -388,7 +388,7 @@ packstr <- function(str=NULL, state="all"){
   str %>% paste %>% str_replace_all(patx,repx) %>% tolower()  %>%  drop_element_regex("^$")
 }
 
-seeraw <- function(filename=NULL,pageno=NULL,string="",udpipe=T,wholeword=T,model=model1){
+seeraw <- function(filename=NULL,pageno=NULL,string="",udpipe=T,wholeword=T,modelf=modelfiles[1]){
   # sub function to get +1 -1 lines of text
   Get_text <- function(Pagetext, string, wholeword) {
     if(wholeword) string <- paste0("\\b",string,"\\b")
@@ -399,7 +399,7 @@ seeraw <- function(filename=NULL,pageno=NULL,string="",udpipe=T,wholeword=T,mode
     which(str_detect(Pagetext,string)) -> x1
     lines2show <- base::union(x1-1,x1) %>% base::union(x1+1) %>% sort
     names(Pagetext) <- seq_along(along.with = Pagetext)
-    Pagetext[lines2show] %>% as.data.table(keep.rownames = T)
+    Pagetext[lines2show]
   }
   
   #use pdftools if page number is available else readtext
@@ -410,9 +410,10 @@ seeraw <- function(filename=NULL,pageno=NULL,string="",udpipe=T,wholeword=T,mode
     text <- Get_text(Pagetext, string,wholeword)
     message(paste0("file:",filename," ('",string,"')"," found in ",length(text)," line(s) out of a total lines of ",NROW(Pagetext)))
     
-    if (text[1,.] %in% c("NONE")) return("NONE")
+    if (text[1] %in% c("NONE")) return("NONE")
     if(udpipe){
-      x1 <- udpipe_annotate(object = model,x = paste(text,collapse=" ")) %>% as.data.table
+      mod <- udpipe_load_model(modelf)
+      x1 <- udpipe_annotate(object = mod,x = paste(text,collapse=" ")) %>% as.data.table
       x1[,sentence] %>% unique
     } else text
 }

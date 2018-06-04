@@ -7,8 +7,9 @@ library(shiny)
 #  suppressPackageStartupMessages(library(data.table))
 
 #setwd("/home/rstudio/nlp")
-source("conllu.R")
-  
+source("fsm.R")
+ 
+ 
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(
@@ -38,7 +39,7 @@ server <- function(input, output) {
 
   
      output$x <- renderText({
-       seeraw(filename = scfile[input$sn],pageno = 1,string = "")
+       seeraw(filename = filenames[input$sn],pageno = 1,string = "the",udpipe = F)
       # input$file$datapath
      })
      
