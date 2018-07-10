@@ -3,13 +3,12 @@
 library(shiny)
 #runExample("01_hello")
 #  library(magrittr)
- # library(rdrop2)
+library(rdrop2)
 #  suppressPackageStartupMessages(library(data.table))
 
 #setwd("/home/rstudio/nlp")
 source("fsm.R")
- 
- 
+
 
 # Define UI for application that draws a histogram
 ui <- fluidPage(

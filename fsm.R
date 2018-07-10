@@ -3,7 +3,6 @@ library(magrittr)
 library(stringr)
 library(lubridate)
 library(readtext)
-library(data.table)
 library(pdftools)
 library(udpipe)
 library(textclean)
@@ -19,6 +18,7 @@ library(htmltools)
 library(wrapr)
 library(textreuse)
 library(rdrop2)
+library(data.table)
 
 Readloc <- function(vars = qc(dtm_flat,cit_flat,cross_ref,dtmsc)) {
   varfiles <- file.path(casepath,vars)
@@ -50,6 +50,17 @@ Savepub <- function(vars = qc(mpj.term,aifcited,colos_mpj)) {
   }
 }
 
+Readbooks <- function(books=qc(mpj.term,colos_mpj)) {
+  vars <- file.path(bookpath,books)
+  for(i in seq_along(along.with = vars)){
+    cat(paste("reading specific case variables....",vars[i]))
+    if(file.exists(vars[i])) vars[i] <- {
+      readRDS(vars[i])
+      cat("..read successfully\n") 
+    } else message("..file does not exist")
+  }
+}
+
 runsc_tagging <- function(files=scfile,mod=m){
   for(i in seq_along(files) ){
     cat(paste0("\nStarted file:",i,": ("))
@@ -61,15 +72,32 @@ runsc_tagging <- function(files=scfile,mod=m){
 }
 
 cleanraw <- function(text){
-  text %>%  str_replace_all(pattern = "[Vv]s*\\.",replacement = "vs") %>% 
-    str_replace_all(pattern = "(M[rs]s*)\\.",replacement = "\\1") %>% 
-    str_replace_all(pattern = "[Nn]o\\.",replacement = "number") %>% 
-    str_replace_all(pattern = "Dr\\.",replacement = "Dr")
+  layr1 <- text %>%  str_replace_all(pattern = "[Vv]s*\\.",replacement = "vs") %>%
+    str_replace_all(pattern = "(M[RrsS]s*)\\.",replacement = "\\1") %>% 
+    str_replace_all(pattern = "[Nn][oO]\\.",replacement = "number ") %>% 
+    str_replace_all(pattern = "D[rR]\\.",replacement = "Dr") %>% 
+    str_replace_all(pattern = "[Ee]x\\.",replacement = "ex") %>% 
+    str_replace_all(pattern = "eg\\.",replacement = "eg") %>% 
+    str_replace_all(pattern = "etc\\.",replacement = "etc") %>% 
+    str_split("\n") %>% 
+    unlist %>% 
+    str_replace_all(pattern = "^([1-9][0-9]*)(\\. )",replacement = "\\1) ") %>%  # replace bullet number punctuation period by closing bracket
+    str_replace(pattern = "([A-Za-z]{2,})\\d{1,2}\\b",replacement = "\\1") # remove footnote numbering upto 2 digits
+  
+  # remove rows less than 20 characters AND in vicinty of 5 lines of Signature string
+  nsig <- grep(pattern = "Signature Not Verified", layr1,ignore.case = T)
+  if(length(nsig) ==1) {
+    rangesig <- nsig:(nsig+6)
+    r1 <- intersect(which(nchar(layr1)<20) , rangesig)
+    layr1[!( (1:length(layr1)) %in% r1    ) ] %>% 
+      str_remove(regex("Signature.{8,15}")) %>% 
+      str_remove(regex("^Digitally signed.{2,4}")) %>%
+      str_trim %>% 
+      drop_element(pattern = "^$")
+  } else layr1
 }
 
 clean_dtm <- function(dtm){
-  dtm[str_detect(string = token,pattern = "[A-Za-z]{2,}\\d{1,2}\\b"),
-      token:=str_replace(string = token,pattern = "([A-Za-z]{2,})\\d{1,2}\\b",replacement = "\\1")] #to remove footnote numbers suffixed to some words.
   dtm[grepl("\\bors|\\banr",token,ignore.case = T),upos:="NOUN"]
 }
 
@@ -424,54 +452,102 @@ seeraw_all <- function(files = scfile,pat="ZZZZ",tokenised=F){
   x1
 }
 
-markout <- function(ltext,flag) {
-  if(flag=="head") ltext %>% lapply(function(x) {x[1] <- "HEADERZZZZ"; x}) -> ltext2
-  if(flag=="foot") ltext %>% lapply(function(x) {x[length(x)] <- "FOOTERZZZZ"; x}) -> ltext2
-  ltext2
-}
-
 autodet <- function(filename=NULL,verbose=F,ret_full=F){
   npages <- pdf_info(filename)$pages
   alltext <- pdf_text(filename) %>%  str_split(pattern = "\n") %>% lapply(str_squish) %>% lapply(drop_element_regex,"^$")
-  dt_allhf <- data.table(first=character(npages),last=character(npages),cond1=logical(npages),cond2=logical(npages))
+  dt_allhf <- data.table(page=integer(),lines=character(),loc=character(),string=character(),cond=logical())
   
   # check basic known strings for isolated first level elemination
-  condition_true <- function(string){
-    x1 <- as.numeric(string) %>% is.na %>% not() || 
-      length(packstr(string,state = "all"))==0 || 
-      packstr(string,state = "all") %in% c("pageof","page","canoofpageof")
-    x1
+  # condition_true <- function(string){
+  #   x1 <- as.numeric(string) %>% is.na %>% not() || 
+  #     length(packstr(string,state = "all"))==0 || 
+  #     packstr(string,state = "all") %in% c("pageof","page","canoofpageof")
+  #   x1
+  # }
+  
+  markzz <- function(dt_allhf, cathead, alltext) {
+    if(uniqueN(dt_allhf[loc==cathead,string])<=2) {
+      dt_allhf[loc==cathead,cond:=T]
+      modified_alltext <- 
+        lapply(alltext, function(x) {
+          i <- getrow(cathead,x)
+          x[i]<-"ZZZZ"
+          x
+        })
+    } else modified_alltext <- alltext
+    
+    modified_alltext
+  }
+  
+  getrow <- function(cathead, x) {
+    switch(cathead, 
+           h1 = 1, 
+           h2 = 2, 
+           ln = length(x),
+           ln_1 =length(x) -1)
+  }
+  
+  addrow <- function(dt_allhf, i,cathead, comp_page) {
+    x <- packstr(str = comp_page[getrow(cathead,comp_page)],state="all")
+    if (length(x)==0) x <- NA
+    dt_allhf <<- rbind(dt_allhf,data.table(page=i,lines=length(comp_page),loc=cathead,string=x,cond=F))
   }
   
   for( i  in  1:npages){
     comp_page <- alltext[[i]] # take each page in a variable
-    poshead <- comp_page[1]
-    posfoot <- comp_page[length(comp_page)]
     
-    # first level filter and marking of headers and footers - we just replace the forst and last lines
-    if(condition_true(poshead)) comp_page[1] <- "HEADERZZZZ"
-    if(condition_true(posfoot)) comp_page[length(comp_page)] <- "FOOTERZZZZ"
+    # poshead1 <- comp_page[1]
+    # poshead2 <- comp_page[2]
+    # posfoot1 <- comp_page[length(comp_page)]
+    # posfoot2 <- comp_page[length(comp_page)-1]
+    
+    # first level filter and marking of headers and footers - we just replace the first and last lines
+    # if(condition_true(comp_page[1])) comp_page[1] <- "HEADERZZZZ"
+    # if(condition_true(comp_page[length(comp_page)])) comp_page[length(comp_page)] <- "FOOTERZZZZ"
     
     # store the first and last lines for each page in a data.table
-    dt_allhf$first[i]<- poshead
-    dt_allhf$last[i] <- posfoot
+    addrow(dt_allhf,i,"h1",comp_page)
+    addrow(dt_allhf,i,"h2",comp_page)
+    addrow(dt_allhf,i,"ln",comp_page)
+    addrow(dt_allhf,i,"ln_1",comp_page)
     
+    
+    # dt_allhf <- rbind(dt_allhf,data.table(page=i,loc='h2',string=packstr(str = comp_page[2],state="all"),cond=F))
+    # dt_allhf <- rbind(dt_allhf,data.table(page=i,loc='ln',string=packstr(str = comp_page[length(comp_page)],state="all"), cond=F))
+    # dt_allhf <- rbind(dt_allhf,data.table(page=i,loc='ln_1',string= packstr(str = comp_page[length(comp_page)-1],state="all"),cond=F))
+    # 
     # and also store a logical variable, if TRUE it means the header (cond1) or footer (cond2) has been replaced by the marker string.
-    dt_allhf$cond1[i]<- condition_true(poshead)
-    dt_allhf$cond2[i] <- condition_true(posfoot)
+    # dt_allhf$cond1[i]<- condition_true(poshead)
+    # dt_allhf$cond2[i] <- condition_true(posfoot)
     
-    dt_allhf$packh[i] <-  ifelse(condition_true(poshead),NA,packstr(str = poshead,state="all"))
-    dt_allhf$packf[i] <-  ifelse(condition_true(posfoot),NA,packstr(str = posfoot,state="all"))
+    #dt_allhf$packf[i] <-  ifelse(condition_true(posfoot),NA,packstr(str = posfoot,state="all"))
     
-    alltext[[i]] <- comp_page
+    #alltext[[i]] <- comp_page # store back the modified page if any else the same page
   }
-  if(!all(dt_allhf$cond1))
-    if(uniqueN(dt_allhf$packh)<=2) markout(alltext,flag="head")  -> alltext else message("..no headers detected.",appendLF = F)
-  if(!all(dt_allhf$cond2))
-    if(uniqueN(dt_allhf$packf)<=2) markout(alltext,flag="foot")  -> alltext else message("..no footers detected.")
+  
+  # if(!all(dt_allhf$cond1))
+  #   if(uniqueN(dt_allhf$packh)<=2) markout(alltext,flag="head")  -> alltext else message("..no headers detected.",appendLF = F)
+  # if(!all(dt_allhf$cond2))
+  #   if(uniqueN(dt_allhf$packf)<=2) markout(alltext,flag="foot")  -> alltext else message("..no footers detected.")
+  
+ 
+  alltext <- markzz(dt_allhf,"h1",alltext)
+  alltext <- markzz(dt_allhf,"h2",alltext)
+  alltext <- markzz(dt_allhf,"ln",alltext)
+  alltext <- markzz(dt_allhf,"ln_1",alltext)
+  # if(uniqueN(dt_allhf[loc=="h2",string])<=2) lapply(alltext, function(x) {x[2]<-"ZZZZ";x}) -> alltext 
+  # if(uniqueN(dt_allhf[loc=="ln",string])<=2) lapply(alltext, function(x) {x[length(x)]<-"ZZZZ";x}) -> alltext 
+  # if(uniqueN(dt_allhf[loc=="ln_1",string])<=2) lapply(alltext, function(x) {x[length(x)-1]<-"ZZZZ";x}) -> alltext 
+  #if()  message("..no headers detected.",appendLF = F)
+  if(nrow(dt_allhf[loc %in% c("h1","h2") & cond])>0) message("headers removed") else message("NO HEADERS FOUND")
+  if(nrow(dt_allhf[loc %in% c("ln","ln_1") & cond])>0) message("footers removed") else message("NO FOOTERS FOUND")
   
   #drop the rows with markers
-  if(ret_full) alltext %>% lapply(drop_element_regex, pattern = "HEADERZZZ|FOOTERZZZZ") %>% lapply(c) %>% unlist else dt_allhf
+  if(ret_full) alltext %>% 
+    lapply(drop_element_regex, pattern = "ZZZ") %>% 
+    lapply(c) %>% # concatenate all list elements
+    unlist else 
+    dt_allhf
 }
 
 autosmry <- function(dtm=dtm_flat,docno=1, valuen=100,valuebands=20, seed=123){
@@ -482,4 +558,98 @@ autosmry <- function(dtm=dtm_flat,docno=1, valuen=100,valuebands=20, seed=123){
   candidates1 <- textrank_candidates_lsh(lemma1$lemma,sentence_id = lemma1$sentence_id,
                                          minhashFUN = minhash_generator(n = valuen, seed = seed),bands = valuebands)
   textrank_sentences(data = sent1, terminology = lemma1,textrank_candidates = candidates1) 
+}
+
+
+# the following functions are used in Ripple Down Rules Shiny app
+genr_dt <- function(dtflat,big=T){
+dtflat[,.(doc_id,sentence_id,sentence)] %>% unique -> dsent2
+  dsent2$suid <- unique_identifier(dsent2,c("doc_id","sentence_id"))
+if(big) dsent2[,.(doc_id,sentence_id,suid)][dtflat,on=.(doc_id,sentence_id)] else
+  dsent2
+}
+
+fno <- function(dt,n,id="nowords"){
+  dt[,eval(id) := F]
+  x <- dt[,{count <- words(sentence) %>% NROW; list(col1 = ifelse(count >= n,T,F))},by=suid]
+  dt[,eval(id) := x$col1]
+}
+
+fpat <- function(dt,pat="ZZZ",id="rule1") {
+  dt[grepl(pat,sentence,ignore.case = T),eval(id) :=T]
+  dt[is.na(get(id)),eval(id) :=F]
+}
+
+fpost <- function(dt,pat="ZZZ",id="post1",n=1){
+  dt[,eval(id) :=F]
+  indx <- grep(pat,dt$sentence,ignore.case = T)
+  i <- 1
+  while(i<=n){
+  dt[indx+i,eval(id) := T]
+    i <- i + 1
+  }
+}
+
+fpos <- function(dtm,pos="VERB",featpat = "past",id="past") {
+  dt <- genr_dt(dtm,big = F)
+  dt[, eval(id) := F]
+  sids <- dtm[upos==pos & grepl(featpat,feats,ig=T),unique(sentence_id)]
+  dt[sentence_id %in% sids, eval(id) := T]
+  dt[!sentence_id %in% sids, eval(id) := F]
+}
+
+goldpos <- function(dt,range,verbose=F){
+  dt[,gold := NA]
+  dt[range,gold := T]
+  dt[is.na(gold),gold:=F]
+  message("Marked gold  positive")
+  if(verbose) dt[range,sentence][]
+}
+
+goldneg <- function(dt,range){
+  dt[range,gold := F]
+  message("Marked gold  negative")
+  dt[range,sentence][]
+}
+
+f1score <- function(dt,rule){
+  dt[,c("TP","FP","TN","FN") := NA]
+  dt[get(rule)==T & gold==T,TP :=T]
+  dt[get(rule)==T & gold==F,FP :=T]
+  dt[get(rule)==F & gold==T,FN :=T]
+  dt[get(rule)==F & gold==F,TN :=T]
+  tp <- dt[TP==T,.N]
+  fp <- dt[FP==T,.N]
+  fn <- dt[FN==T,.N]
+  tn <- dt[TN==T,.N]
+  assert_that((tp+fp+fn+tn) == nrow(dt))
+  prec <- tp/(tp+fp)
+  recall <- tp/(tp+fn)
+  data.table(F1=round(2*prec*recall*100/(prec+recall),digits = 1),
+             precision=round(prec*100,digits = 1),
+             recall = round(recall*100,1),
+             TP = as.integer(tp),TN=as.integer(tn), FP=as.integer(fp),FN=as.integer(fn),
+             rule = rule
+             )
+}
+
+f1array <- function(dt,rules){
+  filearray <- expand.grid(filenames,rules,stringsAsFactors = F)[,1]
+  rulearray <- expand.grid(filenames,rules,stringsAsFactors = F)[,2]
+  map2_dfr(filearray,rulearray,~f1score(dsent[doc_id==.x],as.character(.y))) %>% cbind(file=filearray)
+}
+
+f1group <- function(dt,rules,filewise = T, join = "AND"){
+  r <- paste(rules,collapse = " & ")
+  cat('dt[eval(parse(text = r)),newcol := T]',file = "script")
+  dt$newcol <- F
+  dt <- parse("script") %>% eval
+  if (filewise) map_dfr(filenames,~f1score(dsent[doc_id==.x],"newcol")) %>% cbind(file=filenames) else
+  f1score(dt,"newcol")
+}
+
+feats <- function(dtm=dtm_flat,pos="NOUN|VERB",listout=T) {
+  #dtm[grepl(pattern = pos,x = upos,ig=T),.(upos,words = list(unique(token))),by=feats] %>% unique
+  if(listout) dtm[grepl(pattern = pos,x = upos,ig=T),.(words = list(unique(token))),by=.(upos,feats)][order(upos,feats)] %>% unique else
+  dtm[grepl(pattern = pos,x = upos,ig=T),.(words = paste(unique(token),collapse = ";")),by=.(upos,feats)][order(upos,feats)] %>% unique
 }
