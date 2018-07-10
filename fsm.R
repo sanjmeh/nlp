@@ -640,11 +640,12 @@ f1array <- function(dt,rules){
 }
 
 f1group <- function(dt,rules,filewise = T, join = "AND"){
+  filenames <- dt$doc_id %>% unique()
   r <- paste(rules,collapse = " & ")
   cat('dt[eval(parse(text = r)),newcol := T]',file = "script")
   dt$newcol <- F
   dt <- parse("script") %>% eval
-  if (filewise) map_dfr(filenames,~f1score(dsent[doc_id==.x],"newcol")) %>% cbind(file=filenames) else
+  if (filewise) map_dfr(filenames,~f1score(dt[doc_id==.x],"newcol")) %>% cbind(file=filenames) else
   f1score(dt,"newcol")
 }
 
@@ -652,4 +653,11 @@ feats <- function(dtm=dtm_flat,pos="NOUN|VERB",listout=T) {
   #dtm[grepl(pattern = pos,x = upos,ig=T),.(upos,words = list(unique(token))),by=feats] %>% unique
   if(listout) dtm[grepl(pattern = pos,x = upos,ig=T),.(words = list(unique(token))),by=.(upos,feats)][order(upos,feats)] %>% unique else
   dtm[grepl(pattern = pos,x = upos,ig=T),.(words = paste(unique(token),collapse = ";")),by=.(upos,feats)][order(upos,feats)] %>% unique
+}
+
+getfiles <- function(dir){
+  filenames <- 
+    list.files(pattern = "pdf|PDF",path = dir,full.names = T) %>% 
+    str_split("/",n = 1,simplify = T) %>% 
+    as.character()
 }
