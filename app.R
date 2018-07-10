@@ -6,6 +6,12 @@ root <- "nlp/"
 token <- drop_auth(rdstoken = path.expand("~/nlp/tokenfile.RDS"))
 fold <- drop_dir(dtoken = token,path = "nlp/") %>% as.data.table %>% .[.tag=="folder" & !grepl("/nlp/.git|.rproj|rscon|.pm2",path_lower),str_sub(path_display,6)]
 own <- drop_acc(dtoken = token)$name$display_name
+#runExample("01_hello")
+#  library(magrittr)
+#  suppressPackageStartupMessages(library(data.table))
+
+#setwd("/home/rstudio/nlp")
+source("fsm.R")
 
 ui <- fluidPage(h1("DROPBOX ACCESS TEXT"),
     sidebarLayout(
