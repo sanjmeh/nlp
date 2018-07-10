@@ -1,48 +1,53 @@
-#suppressPackageStartupMessages(library(pdftools))
-#cat("test")  
 library(shiny)
-#runExample("01_hello")
-#  library(magrittr)
- # library(rdrop2)
-#  suppressPackageStartupMessages(library(data.table))
-
-#setwd("/home/rstudio/nlp")
+library(rdrop2)
+#print(getwd())
 source("fsm.R")
- 
- 
+root <- "nlp/"
+token <- drop_auth(rdstoken = path.expand("~/nlp/tokenfile.RDS"))
+fold <- drop_dir(dtoken = token,path = "nlp/") %>% as.data.table %>% .[.tag=="folder" & !grepl("/nlp/.git|.rproj|rscon|.pm2",path_lower),str_sub(path_display,6)]
+own <- drop_acc(dtoken = token)$name$display_name
 
-# Define UI for application that draws a histogram
-ui <- fluidPage(
-   
-   # Application title
-   titlePanel("Checking file contents","Shiny"),
-   
-   # Sidebar with a slider input for number of bins 
-   sidebarLayout(
-     sidebarPanel(width = 4,selectInput(inputId = "sn",label = "Number of the file",choices = c(1:10),selected = 1)),
-                                      
+ui <- fluidPage(h1("DROPBOX ACCESS TEXT"),
+    sidebarLayout(
+                  sidebarPanel(p("Dropbox account linked:"),
+                      h4(own),
+                     # textInput("text","Search string",placeholder = "Enter a file search string"),
+                      #p("Files matching:"),
+                      selectInput("folders","Folders in dropbox /nlp",choices = fold),
+                      actionButton(inputId = "go","GO!"),
+                     br(),
+                      selectInput("fname","Select File",choices = "loading",selected = "loading")
+                     
+                  ),                    
      mainPanel(
-       h3(textOutput("First page")),
-       tableOutput("x")
+       h3("List of files"),
+       dataTableOutput("files"),
+       textOutput("selectedfile")
      )
    )
 )
 
       
-
-# Define server logic required to draw a histogram
-server <- function(input, output) {
-   
-    #dt <- reactive(input$files) %>% as.data.table()
-     
-  #file <- isolate(input$file$datapath)
-
+server <- function(input, output, session) {
+  observe({
+    #req(nchar(input$text)>2,cancelOutput = T)
+    #updateSelectInput(session,inputId = "folders",label = "Dropbox folders to choose from",choices = dlist)
+    #print(paste("file selected:",str_sub(input$folders,6)))
+    #print(paste("Normalised:",normalizePath(str_sub(input$folders,6))))
   
-     output$x <- renderText({
-       seeraw(filename = filenames[input$sn],pageno = 1,string = "the",udpipe = F)
-      # input$file$datapath
-     })
-     
+   #p <- eventReactive(input$go,paste0(root,input$folders))
+    observeEvent(input$go,{
+      p <- paste0(root,input$folders)
+      p2 <- drop_dir(p) %>% as.data.table
+      output$files <- renderDataTable(p2[,c(".tag","name","client_modified","server_modified","size")])
+      updateSelectInput(session,inputId = "fname",choices = p2$name)
+      output$selectedfile <- renderText(input$fname) 
+      #drop_download(path = input$folders)
+      #output$page <- renderText({
+        #pdf_text(str_sub(input$folders,6)) %>% str_split(pattern = "\n") %>% .[[1]] %>% str_trim() 
+    })
+  
+  })
 }
 
 # Run the application 
