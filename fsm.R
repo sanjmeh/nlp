@@ -19,16 +19,20 @@ library(wrapr)
 library(textreuse)
 library(rdrop2)
 library(data.table)
+library(googlesheets)
 
 Readloc <- function(vars = qc(dtm_flat,cit_flat,cross_ref,dtmsc)) {
   varfiles <- file.path(casepath,vars)
   for(i in seq_along(along.with = varfiles)){
-    cat(paste("reading specific case variables....",varfiles[i]))
+    cat(paste("reading from disk....",varfiles[i]))
     if(file.exists(varfiles[i])) { 
-      assign(vars[i],readRDS(varfiles[i]),envir = .GlobalEnv)
+      assign(vars[i],readRDS(varfiles[i]),envir = .GlobalEnv) # read the variable into the global env
       cat("..read\n")
     } else message("..file does not exist")
   }
+  message("Loading udpipe models")
+  model_englishud <<- udpipe_load_model(file = list.files(pattern = "english-ud.+2\\.1"))
+  model_englishpartut <<- udpipe_load_model(file = list.files(pattern = "english-partut"))
   cat("Done.")
 }
 Saveloc <- function(vars = qc(dtm_flat,cit_flat,cross_ref,dtmsc), locpath=casepath) {
@@ -81,9 +85,9 @@ cleanraw <- function(text){
     str_replace_all(pattern = "etc\\.",replacement = "etc") %>% 
     str_split("\n") %>% 
     unlist %>% 
-    str_replace_all(pattern = "^([1-9][0-9]*)(\\. )",replacement = "\\1) ") %>%  # replace bullet number punctuation period by closing bracket
-    str_replace(pattern = "([A-Za-z]{2,})\\d{1,2}\\b",replacement = "\\1") # remove footnote numbering upto 2 digits
-  
+    str_replace_all(pattern = "^([1-9][0-9]{0,1})(\\. )",replacement = "\\1) ") %>%  # replace bullet number punctuation period by closing bracket
+    str_replace(pattern = "([A-Za-z]{2,})\\d{1,2}\\b",replacement = "\\1") %>%  # remove footnote numbering upto 2 digits
+    str_replace_all("([0-9]{2})\\.([0-9]{2})\\.([12][0-9]{2})","\\1-\\2-\\3")
   # remove rows less than 20 characters AND in vicinty of 5 lines of Signature string
   nsig <- grep(pattern = "Signature Not Verified", layr1,ignore.case = T)
   if(length(nsig) ==1) {
@@ -101,7 +105,8 @@ clean_dtm <- function(dtm){
   dtm[grepl("\\bors|\\banr",token,ignore.case = T),upos:="NOUN"]
 }
 
-tag <- function(file = NULL, model = model1){
+
+tag <- function(file = NULL, model = model_englishud){
   cat("\nAutodetecting & removing headers and footers...")
   alltext <- suppressWarnings( autodet(file,ret_full = T)  )
   cat("Cleaning Vs., Mr., Mrs., Dr., No.,..")
@@ -111,7 +116,8 @@ tag <- function(file = NULL, model = model1){
   udpipe_annotate(object = model,x = onetext) %>% as.data.table(keep.rownames = F) -> x1 # main line in function.
   suppressWarnings(x1$token_id %<>% as.integer() )
   suppressWarnings(x1$sentence_id %<>% as.integer() )
-  x1$uid <- unique_identifier(x = x1,fields = c("doc_id", "sentence_id","token_id"))
+  #x1$uid <- unique_identifier(x = x1,fields = c("doc_id", "sentence_id","token_id"))
+  #x1$suid <- unique_identifier(x = x1,fields = c("doc_id", "sentence_id"))
   dtm_clean <- clean_dtm(dtm=x1)
   attributes(dtm_clean)$training_model <- model$file
   attributes(dtm_clean)$atime <- now()
@@ -139,7 +145,7 @@ colo <- function(casedtm=NULL,lawbookdtm=NULL,ngr=2,size=3,minimum_occ=4){
   # pmi_case_terms[x2,on=.(nextlemma,sentence_id)][order(doc_id,sentence_id)]
 }
 
-extract_concl <- function(dtm=dtm_flat,file="kconclusion.txt",html=T){
+extract_concl <- function(dtm=dtm_flat,file="kconclusion.txt",html=F){
   keyw <- readLines(file)
   str_replace_all(keyw,"\"","") -> keyw
   drop_element(keyw,pattern = "^#") -> keyw
@@ -396,7 +402,13 @@ bringout <- function(dt=NULL,str=NULL,n=9,original=T,packed=F){
 extract_summ <- function(sentences=NULL,file="ksummary.txt"){
   keyw <- readLines(file)
   pat<- drop_empty_row(matrix(keyw,ncol = 1)) %>% str_trim %>%  tolower %>%  paste(collapse = "|")
-  grep(x = sentences,pattern = pat,ignore.case = T,value = T )
+  grep(x = sentences,pattern = pat,ignore.case = T, value= T) %>% unique
+}
+
+extract_summ1 <- function(sentences=NULL,file=NULL){
+  keyw2 <- readLines(file)
+  pat2<- drop_empty_row(matrix(keyw2,ncol = 1)) %>% str_trim %>%  tolower %>%  paste(collapse = "|")
+  grepl(x = sentences,pattern = pat2,ignore.case = T)
 }
 
 packfile <- function(file=NULL){
@@ -561,25 +573,64 @@ autosmry <- function(dtm=dtm_flat,docno=1, valuen=100,valuebands=20, seed=123){
 }
 
 
-# the following functions are used in Ripple Down Rules Shiny app
+# the following functions will be used in Ripple Down Rules Shiny app
 genr_dt <- function(dtflat,big=T){
-dtflat[,.(doc_id,sentence_id,sentence)] %>% unique -> dsent2
-  dsent2$suid <- unique_identifier(dsent2,c("doc_id","sentence_id"))
-if(big) dsent2[,.(doc_id,sentence_id,suid)][dtflat,on=.(doc_id,sentence_id)] else
-  dsent2
+  dtflat$suid <- unique_identifier(dtflat,c("doc_id","sentence_id"))
+dtflat[,.(suid,doc_id,sentence_id,sentence)] %>% unique -> dsent2
+ # dsent2$suid <- unique_identifier(dsent2,c("doc_id","sentence_id"))
+if(!big) dtflat[,.(doc_id,sentence_id,suid,sentence)] %>% unique else 
+  dtflat
 }
 
+downgold <- function(googlekey = "1naAek6358YfIfz8ThIIR5zxIMzl0AUuBCvp2QX5T5ls",sheet =1){
+  gs_download(gs_key(googlekey),to = "gold.xlsx")
+}
+
+
+# match gold standard sentence phrases with new sentence segments (after re segmentation of the pdf file)
+# file is google sheet download (use downgold function to get the file)
+mgold <- function(file = "gold.xlsx",sheet = 1, column="conclusion", newsent,trunc=10,verbose=T) {
+  gold1 <- readxl::read_excel(file,sheet = sheet) %>% as.data.table
+  gold1$issue_sentence %<>% as.logical()
+  gold1$conclusion_sentence %<>% as.logical()
+  concltxt <- gold1[conclusion_sentence==T,sentence]
+  issuetxt <- gold1[issue_sentence==T,sentence]
+  goldtxt <- switch(column,conclusion=concltxt,issue = issuetxt)
+  
+  goldtxt %>% map(~ str_detect(newsent, fixed(.x ))) -> l1 # create a list, the length of the goldtxt array, with logical vectors the size of the total rows in newsent DT
+  retindx <- function(i) {
+    x <- which(l1[[i]])
+    if(length(x)==1) x else NA
+  }
+  indx <- seq_along(goldtxt) %>% map_int(.f = retindx)
+  failed_search <- which(is.na(indx))
+  if(length(failed_search) >0 ) {
+  message("Following gold standard text marked by Dhruv are missing in the newly segmented sentences.")
+  print(failed_search)
+  print(goldtxt[failed_search])
+  message("Truncating and matching again. This truncated sentence is also not matching with the new sentences.")
+  goldtxt[failed_search] <- word(goldtxt[failed_search],1,trunc)
+  indx <- seq_along(goldtxt) %>% map_int(.f = retindx)
+  failed_search <- which(is.na(indx))
+  #message("And now these are the failed searches  :-)")
+  #print(failed_search)
+  }
+  return(ifelse(verbose,goldtxt[failed_search],indx))
+}
+
+# save rule of number of words in a sentence
 fno <- function(dt,n,id="nowords"){
   dt[,eval(id) := F]
   x <- dt[,{count <- words(sentence) %>% NROW; list(col1 = ifelse(count >= n,T,F))},by=suid]
   dt[,eval(id) := x$col1]
 }
 
-fpat <- function(dt,pat="ZZZ",id="rule1") {
+fpat <- function(dt=dtm_flat,file="kconclusion.txt",id="kconclusion") {
+  keyw <- readLines(file)
+  pat<- drop_empty_row(matrix(keyw,ncol = 1)) %>% str_trim %>%  paste(collapse = "|")
   dt[grepl(pat,sentence,ignore.case = T),eval(id) :=T]
   dt[is.na(get(id)),eval(id) :=F]
 }
-
 fpost <- function(dt,pat="ZZZ",id="post1",n=1){
   dt[,eval(id) :=F]
   indx <- grep(pat,dt$sentence,ignore.case = T)
@@ -589,29 +640,56 @@ fpost <- function(dt,pat="ZZZ",id="post1",n=1){
     i <- i + 1
   }
 }
-
-fpos <- function(dtm,pos="VERB",featpat = "past",id="past") {
-  dt <- genr_dt(dtm,big = F)
-  dt[, eval(id) := F]
-  sids <- dtm[upos==pos & grepl(featpat,feats,ig=T),unique(sentence_id)]
-  dt[sentence_id %in% sids, eval(id) := T]
-  dt[!sentence_id %in% sids, eval(id) := F]
+vec_sent <- function(ds=dtm_flat$sentence, dimension = 10000, numwords = 10000) {
+unlist(ds, use.names = F) -> d1
+text_tokenizer(num_words = numwords) -> die
+fit_text_tokenizer(object = die,x =  d1) -> diehard
+texts_to_sequences(tokenizer = diehard, texts = d1)-> diesoft
+vectorize_sequences(sequences = diesoft, dimension = dimension)
 }
 
-goldpos <- function(dt,range,verbose=F){
+run_model <- function(tx= trainx, ty= trainy){model <- keras_model_sequential() %>%
+  layer_dense(units = 16, activation = "relu", input_shape = c(10000)) %>%
+  layer_dense(units = 16, activation = "relu") %>%
+  layer_dense(units = 1, activation = "sigmoid")
+model %>% compile(
+  optimizer = "rmsprop",
+  loss = "binary_crossentropy",
+  metrics = c("accuracy")
+)
+model %>% fit(tx, ty, epochs = 4, batch_size = 512)}
+test_mod <- function(tex= textx, tey=testy){
+  results <- model %>% evaluate(tex, tey)}
+
+
+# Attach a new column gold to dt taking the gold standard values tagged by Dhruv passed as a DT in gold. 
+# Both dt and gold must be same number of rows datatables and must have the same sentences in same sequence.
+# Pass "issue" or "conclusion" to the sty (sentence type) parameter
+goldpos <- function(dt,gold,sty = "issue", verbose=F){ 
+  assert_that(nrow(dt)==nrow(gold))
   dt[,gold := NA]
+  range <- switch(sty,issue=which(gold$issue_sentence), conclusion=which(gold$conclusion_sentence))
+  #range <- which(gold1$issue_sentence)
   dt[range,gold := T]
   dt[is.na(gold),gold:=F]
   message("Marked gold  positive")
   if(verbose) dt[range,sentence][]
 }
 
+# not needed now as goldpos will tag F all other sentences not tagged as T
 goldneg <- function(dt,range){
   dt[range,gold := F]
   message("Marked gold  negative")
   dt[range,sentence][]
 }
-
+fpos <- function(dtm,pos="VERB",featpat = "past",id="past") {
+  dt <- genr_dt(dtm,big = F)
+  dt[, eval(id) := F] #initialize the new rule column 
+  sids <- dtm[grepl(pos,upos) & grepl(featpat,feats,ig=T),unique(sentence_id)]
+  dt[sentence_id %in% sids, eval(id) := T]
+  dt[!sentence_id %in% sids, eval(id) := F]
+}
+# e.g. f1score(dt,"nowords); make sure gold column is updated with the same rule
 f1score <- function(dt,rule){
   dt[,c("TP","FP","TN","FN") := NA]
   dt[get(rule)==T & gold==T,TP :=T]
@@ -651,8 +729,13 @@ f1group <- function(dt,rules,filewise = T, join = "AND"){
 
 feats <- function(dtm=dtm_flat,pos="NOUN|VERB",listout=T) {
   #dtm[grepl(pattern = pos,x = upos,ig=T),.(upos,words = list(unique(token))),by=feats] %>% unique
-  if(listout) dtm[grepl(pattern = pos,x = upos,ig=T),.(words = list(unique(token))),by=.(upos,feats)][order(upos,feats)] %>% unique else
-  dtm[grepl(pattern = pos,x = upos,ig=T),.(words = paste(unique(token),collapse = ";")),by=.(upos,feats)][order(upos,feats)] %>% unique
+  if(listout) dtm[grepl(pattern = pos,x = upos,ig=T),
+                  .(words = list(unique(token))),
+                  by=.(upos,feats)][order(upos,feats)] %>% 
+    unique else
+  dtm[grepl(pattern = pos,x = upos,ig=T),
+      .(words = paste(unique(token),collapse = ";")),
+      by=.(upos,feats)][order(upos,feats)] %>% unique
 }
 
 getfiles <- function(dir){
