@@ -1,4 +1,4 @@
-#----- FUNCTIONS for legal text analysis coded by Papa -----
+#----- FUNCTIONS for text analysis. Donot add any body code -----
 library(magrittr)
 library(stringr)
 library(lubridate)
@@ -104,7 +104,6 @@ cleanraw <- function(text){
 clean_dtm <- function(dtm){
   dtm[grepl("\\bors|\\banr",token,ignore.case = T),upos:="NOUN"]
 }
-
 
 tag <- function(file = NULL, model = model_englishud){
   cat("\nAutodetecting & removing headers and footers...")
