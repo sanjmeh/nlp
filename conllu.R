@@ -1,20 +1,20 @@
 library(assertthat)
 source("fsm.R")
 
-casepath <- "./SC_2018"
+casepath <- "./SC2018"
 bookpath <- "./law_books"
 
 
 #---- LOAD AND VALIDATE VARIABLES -----
 assert_that(grepl("nlp",getwd()),msg = "You are not in the correct working directory")
-suppressWarnings(rm(filenames,scfile,new_files_found,saveddtm,dtm_flat_new,dtm_old,dtm_flat))
+suppressWarnings(rm(filenames,scfile,fannot,saveddtm,dtm_flat_new,dtm_old,dtm_flat))
 is.dir(casepath)
 scfile <- list.files(pattern = "pdf|PDF",path =casepath,full.names = T)
 filenames <- str_sub(scfile,3)
 key_gsupload <- "1H9ApyBnTV7rHnNaQ6IWzVmQPcaVNQXA5uk1ZmgSOzMI"
 
 #-----MAIN PROGRAM : Take user options----
-choice <- readline("(N)Nothing (L)oad from local file /(R)ecompute /(A)nnotate & Compute:")
+choice <- readline("(N)Nothing (L)oad from local file /(R)ecompute /(A)nnotate: ")
 suppressWarnings (switch(choice,
                          N = message("Moving on.."),
                          L = Readloc(),
@@ -24,26 +24,24 @@ suppressWarnings (switch(choice,
 ))
 if(choice=="A") {
   if(NROW(scfile)>0) message(paste("Supreme Court files found and loaded... total files:",NROW(scfile),"in:",casepath))
-  Readloc()
   if(exists("dtm_flat")) {
     pretagged <- dtm_flat$doc_id %>% unique
-    new_files_found <- setdiff(filenames,pretagged)
+    fannot <- setdiff(filenames,pretagged)
     cat("\nFollowing pretagged files present:\n")
     print(dtm_flat[,.N,by=doc_id])
     cat(paste("Existing training model:",attr(dtm_flat,"tr",F)))
     message(paste("\nLast updated at:",attr(dtm_flat,"atime",F)))
     cat("----\n")
-  } else new_files_found <- filenames  
+  } else fannot <- filenames  
   
-  if(exists("new_files_found")  && length(new_files_found)==0) {
+  if(exists("fannot")  && length(fannot)==0) {
     message(paste("All files are already annotated in",casepath,"\nDo you want to annotate them again?")) 
     answer <-       readline("If you say N we will use the existing annotations:(Y/N) ")
   } else {
     cat("\nFiles that are not yet annotated:")
-    print(new_files_found)
-    #new_files_found <- filenames
+    print(fannot)
   }
-  if((exists("answer") && grepl("Y",answer,ig=T)) ||( length(new_files_found)>0 )  ) {
+  if((exists("answer") && grepl("Y",answer,ig=T)) ||( length(fannot)>0 )  ) {
     modelfiles <- list.files(pattern = ".udpipe")
     message("Models available for annotation:")
     print(modelfiles)
@@ -55,10 +53,10 @@ if(choice=="A") {
     cite<- list()
     dtm_sc <- list()
     cat("\nAnnotation and tagging started...")
-    if(length(new_files_found)==0) new_files_found <- filenames
-    dtmsc <- runsc_tagging(files=new_files_found,m=model) 
+    if(length(fannot)==0) fannot <- filenames
+    dtmsc <- runsc_tagging(files=fannot,m=model) 
     # transform the DTM by adding doc_id to each row (doc_id is just the file name with prefix of subdir)
-    dtmsc2 <- map2(dtmsc, new_files_found, ~ .x[, "doc_id" := as.character(.y),]) # learnt this from Stackoverlfow - terrific
+    dtmsc2 <- map2(dtmsc, fannot, ~ .x[, "doc_id" := as.character(.y),]) # learnt this from Stackoverlfow - terrific
     if(exists("dtm_flat")) dtm_old <- dtm_flat else dtm_old <- NULL
     dtm_flat_new <- do.call(rbind,dtmsc2) # combine all DTMs into a flat DT
     dtm_flat <- rbind(dtm_old,dtm_flat_new)
@@ -69,50 +67,39 @@ if(choice=="A") {
 }
 
 if(choice %in% c("R","A")){
-  cat("Running the 'citings()' function on the merged DTM (dtm_flat)..")
-  citings(dtm = dtm_flat,consec = 3) -> cit_flat #consecutive sentences used as extracts
-  cat("..DONE.\n")
-  if(is.na(cit_flat$referred_cases)[1]) message("No citations found in any file.. aborting citation processing") else {
-  attr(cit_flat,"training_model") <- attr(dtm_flat,"tr",F)
-  #remove numbers and puncts for simplifying regex search 
-  cit_flat$referred_cases %>% str_replace_all("[\\s[:punct:][:digit:]]+","") %>% tolower() -> tmp
-  data.table(case=cit_flat$referred_cases,packed = tmp) ->pcite #this is packed citations
-  map_chr(scfile,packfile) -> tmp
-  data.table(filename=scfile,filecontent=tmp) -> psctext
+  cat("Will not be running the 'citings()' function on the merged DTM (dtm_flat)..as there is a bug\n")
+  #citings(dtm = dtm_flat,consec = 3) -> cit_flat #consecutive sentences used as extracts
+  #cat("..DONE.\n")
+  #if(is.na(cit_flat$referred_cases)[1]) message("No citations found in any file.. aborting citation processing") else {
+  #attr(cit_flat,"training_model") <- attr(dtm_flat,"tr",F)
   
-  cat("Generating cross_ref matrix...")
-  assert_that(nrow(pcite)>0,nrow(psctext)>0)
-  
-  
-  map2_int(.x = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var1, 
-           .y = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var2,
-           .f = ~ str_count(string = psctext[filename==scfile[.x],filecontent,with=T],
-                            pattern = pcite[case==cit_flat$referred_cases[.y],packed])) %>% 
-    matrix(ncol = nrow(pcite)) -> cross_ref
-  cat("generated\n")
-  colnames(cross_ref)<- substr(cit_flat$referred_cases,1,16)
-  rownames(cross_ref) <- scfile
-  
-  map2_int(.x = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var1, 
-           .y = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var2,
-           .f = ~ str_count(string = psctext[filename==scfile[.x],filecontent,with=T],
-                            pattern = pcite[case==cit_flat$referred_cases[.y],packed])) %>% 
-    matrix(ncol = nrow(pcite)) -> cross_ref
-  }
+  # comment : remove numbers and puncts for simplifying regex search 
+  #cit_flat$referred_cases %>% str_replace_all("[\\s[:punct:][:digit:]]+","") %>% tolower() -> tmp
+  # data.table(case=cit_flat$referred_cases,packed = tmp) ->pcite #this is packed citations
+  # map_chr(scfile,packfile) -> tmp
+  # data.table(filename=scfile,filecontent=tmp) -> psctext
+  # 
+  # cat("Generating cross_ref matrix...")
+  # assert_that(nrow(pcite)>0,nrow(psctext)>0)
+  # 
+  # 
+  # map2_int(.x = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var1, 
+  #          .y = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var2,
+  #          .f = ~ str_count(string = psctext[filename==scfile[.x],filecontent,with=T],
+  #                           pattern = pcite[case==cit_flat$referred_cases[.y],packed])) %>% 
+  #   matrix(ncol = nrow(pcite)) -> cross_ref
+  # cat("generated\n")
+  # colnames(cross_ref)<- substr(cit_flat$referred_cases,1,16)
+  # rownames(cross_ref) <- scfile
+  # 
+  # map2_int(.x = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var1, 
+  #          .y = expand.grid(1:nrow(psctext),1:nrow(pcite))$Var2,
+  #          .f = ~ str_count(string = psctext[filename==scfile[.x],filecontent,with=T],
+  #                           pattern = pcite[case==cit_flat$referred_cases[.y],packed])) %>% 
+  #   matrix(ncol = nrow(pcite)) -> cross_ref
+  # }
 } 
 
-
-#---- Load law text books & colocated phrases in law books - needed for SOA -----
-Readbooks <- function(books=qc(mpj.term,colos_mpj)) {
-  vars <- file.path(bookpath,books)
-  for(i in seq_along(along.with = vars)){
-    cat(paste("reading specific case variables....",vars[i]))
-    if(file.exists(vars[i])) vars[i] <- {
-      readRDS(vars[i])
-      cat("..read successfully\n") 
-      } else message("..file does not exist")
-  }
-}
 
 
 #---- Save the variables once recomputation done -----
@@ -124,5 +111,7 @@ if(choice %in% c("A", "R")){
 
 if(exists("dtm_flat")) 
   cat(paste("\n'dtm_flat' was last modified at:",attr(dtm_flat,"atime"))) else 
-  {message("\nNo dtm_flat variable exists for:",appendLF = F); cat(casepath) }
+  { message("\nNo dtm_flat variable exists for:",appendLF = F) 
+    cat(casepath)
+    }
 
