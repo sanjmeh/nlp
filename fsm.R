@@ -20,6 +20,9 @@ library(textreuse)
 library(rdrop2)
 library(data.table)
 library(googlesheets)
+library(openxlsx)
+library(readxl)
+library(keras)
 
 Readloc <- function(vars = qc(dtm_flat,cit_flat,cross_ref,dtmsc)) {
   varfiles <- file.path(casepath,vars)
@@ -582,12 +585,15 @@ if(!big) dtflat[,.(doc_id,sentence_id,suid,sentence)] %>% unique else
 }
 
 downgold <- function(googlekey = "1naAek6358YfIfz8ThIIR5zxIMzl0AUuBCvp2QX5T5ls",sheet =1){
-  gs_download(gs_key(googlekey),to = "gold.xlsx")
+  gs_download(gs_key(googlekey),to = "gold.xlsx",overwrite = T)
 }
 
+upl_newss <- function(googlekey = "1naAek6358YfIfz8ThIIR5zxIMzl0AUuBCvp2QX5T5ls",sheet ="new_ss",newss){
+  gs_edit_cells(gs_key(googlekey),ws = sheet,input = newss,trim = T)
+}
 
 # match gold standard sentence phrases with new sentence segments (after re segmentation of the pdf file)
-# file is google sheet download (use downgold function to get the file)
+# file is google sheet download (use downgold() function to get the file)
 mgold <- function(file = "gold.xlsx",sheet = 1, column="conclusion", newsent,trunc=10,verbose=T) {
   gold1 <- readxl::read_excel(file,sheet = sheet) %>% as.data.table
   gold1$issue_sentence %<>% as.logical()
@@ -595,13 +601,17 @@ mgold <- function(file = "gold.xlsx",sheet = 1, column="conclusion", newsent,tru
   concltxt <- gold1[conclusion_sentence==T,sentence]
   issuetxt <- gold1[issue_sentence==T,sentence]
   goldtxt <- switch(column,conclusion=concltxt,issue = issuetxt)
-  
+  diff1 <- setdiff(goldtxt,newsent)
+  return(diff1)
+  goldwords <- strsplit(goldtxt," ")
   goldtxt %>% map(~ str_detect(newsent, fixed(.x ))) -> l1 # create a list, the length of the goldtxt array, with logical vectors the size of the total rows in newsent DT
-  retindx <- function(i) {
-    x <- which(l1[[i]])
+  #goldwords %>% map_dbl(~ wincl(newsent[11], fixed(.x ))) -> gmatch # create a list, the length of the goldtxt array, with logical vectors the size of the total rows in newsent DT
+  #return(gmatch)
+  retindx <- function(i,lstdet=l1) {
+    x <- which(lstdet[[i]])
     if(length(x)==1) x else NA
   }
-  indx <- seq_along(goldtxt) %>% map_int(.f = retindx)
+  indx <- seq_along(goldtxt) %>% map_int(.f = retindx,lstdet=l1)
   failed_search <- which(is.na(indx))
   if(length(failed_search) >0 ) {
   message("Following gold standard text marked by Dhruv are missing in the newly segmented sentences.")
@@ -609,8 +619,10 @@ mgold <- function(file = "gold.xlsx",sheet = 1, column="conclusion", newsent,tru
   print(goldtxt[failed_search])
   message("Truncating and matching again. This truncated sentence is also not matching with the new sentences.")
   goldtxt[failed_search] <- word(goldtxt[failed_search],1,trunc)
-  indx <- seq_along(goldtxt) %>% map_int(.f = retindx)
-  failed_search <- which(is.na(indx))
+  goldtxt %>% map(~ str_detect(newsent, fixed(.x ))) -> l2 # this time match with shorter sentences
+  indx <- seq_along(goldtxt) %>% map_int(.f = retindx,lstdet=l2)
+  #failed_search <- which(is.na(indx))
+  
   #message("And now these are the failed searches  :-)")
   #print(failed_search)
   }
@@ -639,30 +651,91 @@ fpost <- function(dt,pat="ZZZ",id="post1",n=1){
     i <- i + 1
   }
 }
-vec_sent <- function(ds=dtm_flat$sentence, dimension = 10000, numwords = 10000) {
-unlist(ds, use.names = F) -> d1
+
+# deep learning functions
+vectorize_sequences <- function(sequences, dimension = 10000) {
+  results <- matrix(0, nrow = length(sequences), ncol = dimension)
+  for (i in 1:length(sequences)) {
+    if(length(sequences[[i]])>0) # to cater to zero length strings
+    results[i,sequences[[i]]] <- 1
+  }
+  results #works well ... Tested with vectorize_sequences(c(1,5,3,8),10) - papa
+}
+
+vec_sent <- function(ds=dtm_flat[,.(doc_id,sentence_id,sentence)] %>% unique %>% .[,sentence], dimension = 10000, numwords = 10000) {
+unlist(ds, use.names = F) -> d1 # this line is going to create problems later as unlist will split the same sample data into multiple vector elements
 text_tokenizer(num_words = numwords) -> die
 fit_text_tokenizer(object = die,x =  d1) -> diehard
 texts_to_sequences(tokenizer = diehard, texts = d1)-> diesoft
-vectorize_sequences(sequences = diesoft, dimension = dimension)
+unlist(diesoft) -> china
+vectorize_sequences(sequences = china, dimension = 10000) -> gx1
 }
 
-run_model <- function(tx= trainx, ty= trainy){model <- keras_model_sequential() %>%
-  layer_dense(units = 16, activation = "relu", input_shape = c(10000)) %>%
-  layer_dense(units = 16, activation = "relu") %>%
-  layer_dense(units = 1, activation = "sigmoid")
-model %>% compile(
-  optimizer = "rmsprop",
-  loss = "binary_crossentropy",
-  metrics = c("accuracy")
-)
-model %>% fit(tx, ty, epochs = 4, batch_size = 512)}
-test_mod <- function(tex= textx, tey=testy){
-  results <- model %>% evaluate(tex, tey)}
+read_gold <- function(googlekey = "1naAek6358YfIfz8ThIIR5zxIMzl0AUuBCvp2QX5T5ls",sheet ="new_ss") {
+  gs_read(ss = gs_key(googlekey),ws = sheet, literal = T)
+}
+
+# trainx <- matrix(0)
+# trainy <- matrix(0)
+# pass the output of read_gold() to this function to generate the trainx and trainy global variables
+genr_training <- function(golddt){
+  trainy <<- golddt %>% .[,c(4)] %>% is.na() %>% not %>% as.numeric()
+  trainx <<- vec_sent()
+}
+
+# run_model() should be fed with the two tensors: training x data and "labels" or training y date.
+# returns a trained model. Pls save it.
+run_model <- function(trx= trainx, try= trainy){
+  model <- keras_model_sequential()
+  model %>% 
+    layer_dense(units = 16, activation = "relu", input_shape = c(10000)) %>%
+    layer_dense(units = 16, activation = "relu") %>%
+    layer_dense(units = 1, activation = "sigmoid")
+  model %>% compile(
+    optimizer = "rmsprop",
+    loss = "binary_crossentropy",
+    metrics = c("accuracy")
+  )
+}
+
+build_model <- function() {
+  model <- keras_model_sequential() %>%
+    layer_dense(units = 64, activation = "relu",
+                input_shape = dim(trainx)[[2]]) %>%
+    layer_dense(units = 64, activation = "relu") %>%
+    layer_dense(units = 1,activation = "softmax")
+  
+  model %>% compile(
+    optimizer = "rmsprop",
+    loss = "mse",
+    metrics = c("mae")
+  )
+}
 
 
-# Attach a new column gold to dt taking the gold standard values tagged by Dhruv passed as a DT in gold. 
-# Both dt and gold must be same number of rows datatables and must have the same sentences in same sequence.
+learn1 <- function() {
+k <- 4
+indices <- sample(1:nrow(trainx))
+folds <- cut(indices, breaks = k, labels = FALSE)
+num_epochs <- 100
+all_scores <- c()
+for (i in 1:k) {
+  cat("processing fold #", i, "\n")
+  val_indices <- which(folds == i, arr.ind = TRUE)
+  val_data <- trainx[val_indices,]
+  val_targets <- trainy[val_indices]
+  partial_train_data <- trainx[-val_indices,]
+  partial_train_targets <- trainy[-val_indices]
+  model <- build_model()
+  model %>% fit(partial_train_data, partial_train_targets,
+                epochs = num_epochs, batch_size = 1, verbose = T)
+  results <- model %>% evaluate(val_data, val_targets, verbose = T)
+  all_scores <- c(all_scores, results$mean_absolute_error)
+}
+}
+
+#model2 <- model %>% fit(tx, ty, validation_split =0.2,epochs = 4, batch_size = 512)
+
 # Pass "issue" or "conclusion" to the sty (sentence type) parameter
 goldpos <- function(dt,gold,sty = "issue", verbose=F){ 
   assert_that(nrow(dt)==nrow(gold))
@@ -743,3 +816,37 @@ getfiles <- function(dir){
     str_split("/",n = 1,simplify = T) %>% 
     as.character()
 }
+
+# following functions focus on data prep for word by word deep learning-----
+
+createxl <- function(casefolder=casepath,localfile="scfiles.xlsx") {
+  filenames <- list.files(pattern = "(pdf)|(PDF)$",path =casefolder)
+  fullnames <- list.files(pattern = "(pdf)|(PDF)$",path =casefolder,full.names = T)
+  allfiles <- readtext(file = fullnames)
+  xoscf <- createWorkbook()
+  filenames %>% walk(~createSheet(xoscf,sheetName = .x))
+  lwords <- allfiles$text %>% map(~ text_to_word_sequence(.x) %>% data.table(heading=.,category=0L))
+  lwords %>% walk2(.y = filenames,~addDataFrame(.x,getSheets(xoscf)[[.y]]))
+  input <- readline(paste("Are you sure you want to overwrite the local file",localfile,"(Y/n):"))
+  if (input %in% c("Y","y"))
+    saveWorkbook(xoscf,localfile) else
+      message("Aborted")
+}
+
+read_gold2 <- function(localfile="scfiles.xlsx"){
+  wb <- loadWorkbook(localfile)
+  sheets <- getSheets(wb)
+  all_words <- 
+    seq_along(sheets) %>% 
+    map_dfr(~ readColumns(sheets[[.x]],startColumn = 1,endColumn = 3,startRow = 1,as.data.frame = T) %>% 
+              as.data.table(),.id = "doc")
+    all_words
+}
+
+read_gold3 <- function(localfile="scfiles.xlsx") {
+  wb <- loadWorkbook(localfile)
+  sheets <- getSheets(wb)
+  
+}
+
+

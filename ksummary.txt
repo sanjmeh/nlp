@@ -1,1 +1,2 @@
-sentence_id
+accept|conclude|hold|decide|reject|declare|dismiss|\\bsees
+no reason|examines|strikes|for.+reasons|Hence|from.+above|for.+above
